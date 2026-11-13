@@ -11,6 +11,7 @@ Use Module Federation in Tauri apps with `@module-federation/tauri` and the comp
 - A Tauri custom protocol handler that fetches remote files and caches them on disk.
 - Remotes that keep working offline, after an app restart, and when a remote answers with errors or hangs.
 - Automatic rollback to the last version that loaded when a new release of a remote fails to load.
+- Remotes served from a local folder, for apps that install remotes with their own updater.
 
 ## Package usage
 
@@ -110,10 +111,30 @@ tauri::Builder::default()
 
 How it works, the cache layout and the known limitations are in [docs/offline-and-rollback.md](./docs/offline-and-rollback.md).
 
+## Local remotes
+
+Apps that install remotes themselves (an updater that checks signatures, or an offline installer) can serve a remote URL prefix from a folder instead of the network. The host keeps its `http(s)` entry:
+
+```rust
+use tauri::path::BaseDirectory;
+
+tauri::Builder::default()
+    .plugin(
+        tauri_plugin_module_federation::Builder::new()
+            .local_remote("https://cdn.example.com/guest/", BaseDirectory::AppData, "remotes/guest")
+            .build(),
+    )
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+```
+
+Local remotes skip the network, the cache and rollback. Folders can also be changed at runtime through `LocalRemotes` in the app state. See [docs/local-remotes.md](./docs/local-remotes.md).
+
 ## Documentation
 
 - [Architecture](./docs/architecture.md): how `mf://` requests flow through both packages.
 - [Offline and failed releases](./docs/offline-and-rollback.md): caching, timeouts, last-known-good rollback, configuration, limitations.
+- [Local remotes](./docs/local-remotes.md): serving remotes from a folder on disk.
 - [Vite](./docs/vite.md): `@module-federation/vite` hosts and ES module remotes.
 - [Testing](./docs/testing.md): unit tests, build checks and the end-to-end smoke test.
 - [Releasing](./docs/RELEASING.md): publishing the npm package and the Cargo crate.

@@ -32,7 +32,10 @@ use std::{
 use tauri::http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use url::Url;
 
-use crate::cache::{content_hash, Cache, Cached, Slot, HOP_BY_HOP_HEADERS};
+use crate::{
+    cache::{content_hash, Cache, Cached, Slot, HOP_BY_HOP_HEADERS},
+    local::{self, LocalRemotes},
+};
 
 pub(crate) const COMMIT_PARAM: &str = "mf-commit";
 pub(crate) const ROLLBACK_PARAM: &str = "mf-rollback";
@@ -86,6 +89,7 @@ pub(crate) struct Protocol {
     unreachable: Mutex<HashMap<String, Instant>>,
     served: Mutex<HashMap<String, Served>>,
     rollbacks: Mutex<usize>,
+    local: LocalRemotes,
     /// Whether new entry versions are tried and rolled back on failure.
     rollback_enabled: bool,
 }
@@ -131,7 +135,12 @@ impl Fetched {
 }
 
 impl Protocol {
-    pub fn new(client: reqwest::Client, cache: Cache, rollback_enabled: bool) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        cache: Cache,
+        local: LocalRemotes,
+        rollback_enabled: bool,
+    ) -> Self {
         Self {
             client,
             cache,
@@ -139,6 +148,7 @@ impl Protocol {
             unreachable: Mutex::default(),
             served: Mutex::default(),
             rollbacks: Mutex::default(),
+            local,
             rollback_enabled,
         }
     }
@@ -152,6 +162,15 @@ impl Protocol {
             Ok(target) => target,
             Err((status, message)) => return text(status, message),
         };
+
+        // Local remotes are owned by the app: no network, cache or rollback. Committing
+        // one is a no-op, so the runtime plugin sees a success.
+        if let Some((dir, rest)) = self.local.lookup(&target.url) {
+            return match target.mode {
+                Mode::Commit => empty(StatusCode::NO_CONTENT),
+                Mode::Entry | Mode::Asset => local::serve(&request, &dir, &rest),
+            };
+        }
 
         match target.mode {
             Mode::Commit => self.commit(&target.url),
@@ -638,7 +657,12 @@ mod tests {
     }
 
     fn launch(root: &std::path::Path) -> Protocol {
-        Protocol::new(reqwest::Client::new(), Cache::new(root.to_path_buf()), true)
+        Protocol::new(
+            reqwest::Client::new(),
+            Cache::new(root.to_path_buf()),
+            LocalRemotes::default(),
+            true,
+        )
     }
 
     fn request(protocol: &Protocol, uri: &Uri) -> Response<Vec<u8>> {
@@ -730,6 +754,7 @@ mod tests {
             Protocol::new(
                 reqwest::Client::new(),
                 Cache::new(root.to_path_buf()),
+                LocalRemotes::default(),
                 false,
             )
         };
@@ -777,6 +802,47 @@ mod tests {
         server.serve(200, b"broken again");
         request(&second, &entry);
         assert_eq!(request(&second, &rollback).body(), b"0", "capped");
+    }
+
+    #[test]
+    fn local_remotes_are_read_from_their_folder_without_the_network() {
+        let root =
+            std::env::temp_dir().join(format!("tauri-plugin-mf-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("guest");
+        std::fs::create_dir_all(dir.join("static/js")).unwrap();
+        std::fs::write(dir.join("remoteEntry.js"), "entry").unwrap();
+        std::fs::write(dir.join("static/js/a.js"), "chunk").unwrap();
+
+        let local = LocalRemotes::default();
+        // Nothing listens on this host: every request must come from the folder.
+        local.set("https://remotes.invalid/guest/", &dir).unwrap();
+        let protocol = Protocol::new(
+            reqwest::Client::new(),
+            Cache::new(root.join("cache")),
+            local,
+            true,
+        );
+        let full_url = "https://remotes.invalid/guest/remoteEntry.js?t=1";
+
+        let entry = request(&protocol, &entry_uri(full_url, ""));
+        assert_eq!(entry.status(), StatusCode::OK);
+        assert_eq!(entry.body(), b"entry");
+        assert_eq!(entry.headers()["x-mf-source"], "local");
+
+        let chunk = request(&protocol, &uri("mf://remotes.invalid/guest/static/js/a.js"));
+        assert_eq!(chunk.body(), b"chunk");
+
+        let commit = request(&protocol, &entry_uri(full_url, "&mf-commit=1"));
+        assert_eq!(commit.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            request(&protocol, &uri("mf://localhost/?mf-rollback=1")).body(),
+            b"0"
+        );
+
+        let missing = request(&protocol, &uri("mf://remotes.invalid/guest/missing.js"));
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(!root.join("cache").exists(), "local files are not cached");
     }
 
     #[test]

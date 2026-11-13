@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use tauri::{
+    path::BaseDirectory,
     plugin::{Builder as PluginBuilder, TauriPlugin},
     Manager, Runtime,
 };
@@ -14,10 +15,12 @@ mod mobile;
 
 mod cache;
 mod error;
+mod local;
 mod models;
 mod protocol;
 
 pub use error::{Error, Result};
+pub use local::LocalRemotes;
 
 #[cfg(desktop)]
 use desktop::TauriPluginModuleFederation;
@@ -58,6 +61,7 @@ pub struct Builder {
     connect_timeout: Duration,
     read_timeout: Duration,
     rollback: bool,
+    local_remotes: Vec<(String, BaseDirectory, PathBuf)>,
 }
 
 impl Default for Builder {
@@ -67,6 +71,7 @@ impl Default for Builder {
             connect_timeout: Duration::from_secs(10),
             read_timeout: Duration::from_secs(10),
             rollback: !cfg!(debug_assertions),
+            local_remotes: Vec::new(),
         }
     }
 }
@@ -105,6 +110,35 @@ impl Builder {
     /// Serving cached copies when the network fails is always enabled.
     pub fn rollback(mut self, enabled: bool) -> Self {
         self.rollback = enabled;
+        self
+    }
+
+    /// Serves every remote URL under `prefix` from a local folder instead of the network.
+    ///
+    /// `path` is resolved against `base` (an absolute `path` is used as is). The host keeps
+    /// its usual `http(s)` entry, for example `https://cdn.example.com/guest/remoteEntry.js`
+    /// with the prefix `https://cdn.example.com/guest/`. Its requests are read from the
+    /// folder: no network, no cache and no rollback, since the app owns those files.
+    ///
+    /// ```no_run
+    /// use tauri::path::BaseDirectory;
+    ///
+    /// let app = tauri::Builder::<tauri::Wry>::default().plugin(
+    ///     tauri_plugin_module_federation::Builder::new()
+    ///         // <app data dir>/remotes/guest/remoteEntry.js
+    ///         .local_remote("https://cdn.example.com/guest/", BaseDirectory::AppData, "remotes/guest")
+    ///         .build(),
+    /// );
+    /// ```
+    ///
+    /// To change folders while the app runs, use [`LocalRemotes`] from the app state.
+    pub fn local_remote(
+        mut self,
+        prefix: impl Into<String>,
+        base: BaseDirectory,
+        path: impl Into<PathBuf>,
+    ) -> Self {
+        self.local_remotes.push((prefix.into(), base, path.into()));
         self
     }
 
@@ -154,11 +188,17 @@ impl Builder {
                     .connect_timeout(self.connect_timeout)
                     .read_timeout(self.read_timeout)
                     .build()?;
+                let local_remotes = LocalRemotes::default();
+                for (prefix, base, path) in &self.local_remotes {
+                    local_remotes.set(prefix, app.path().resolve(path, *base)?)?;
+                }
                 app.manage(Protocol::new(
                     client,
                     cache::Cache::new(cache_dir),
+                    local_remotes.clone(),
                     self.rollback,
                 ));
+                app.manage(local_remotes);
 
                 #[cfg(mobile)]
                 let tauri_plugin_module_federation = mobile::init(app, api)?;
