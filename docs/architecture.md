@@ -39,6 +39,8 @@ remotes: { guest: 'guest@http://localhost:3002/remoteEntry.js' }
 
 4. **Nested remotes.** A remote can consume remotes of its own, and those run in a separate runtime instance. During `beforeInit`, the host plugin registers the same hooks as a global runtime plugin, so nested remotes are rewritten too.
 
+If the remote URL is under a [local remote](./local-remotes.md) prefix, steps 2 and 3 read the file from that folder instead: no network, cache or versions.
+
 Only `http(s)` entries are rewritten. Entries already on `mf://` pass through unchanged, because the host and global plugins can both run on one instance.
 
 On Windows, Tauri exposes custom schemes as `http://mf.localhost/...` instead of `mf://...`. The webview handles that mapping, so the plugins do not need to.
@@ -70,6 +72,7 @@ The runtime plugin sends two kinds of control requests over `mf://`. Their respo
 | `packages/tauri/index.js` | The runtime plugin: URL rewriting and the commit and rollback hooks. |
 | `packages/tauri-plugin/src/lib.rs` | `Builder`, `init`, scheme registration, and the debug warning shown when the runtime plugin is missing. |
 | `packages/tauri-plugin/src/protocol.rs` | The request handler: URL resolution, network and cache fallback, entry versions, commit and rollback. |
+| `packages/tauri-plugin/src/local.rs` | Local remotes: URL prefixes mapped to folders, path checks and content types. |
 | `packages/tauri-plugin/src/cache.rs` | On-disk cache: atomic writes, headers, last-known-good and rejected versions. |
 
 ## Debug builds
