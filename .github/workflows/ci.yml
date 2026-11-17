@@ -39,4 +39,5 @@ jobs:
       - name: Check crate package includes README
         run: cargo package --list --locked --allow-dirty --manifest-path packages/tauri-plugin/Cargo.toml | grep -x README.md
       - run: cargo test -p tauri-plugin-module-federation
+      - run: pnpm test
       - run: pnpm pack:tauri

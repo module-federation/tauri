@@ -45,12 +45,26 @@ federation({
 
 Vite remotes must send CORS headers that allow the Tauri origin and should be built with `base: './'`. See [docs/vite.md](https://github.com/module-federation/tauri/blob/main/docs/vite.md) for details.
 
+### Runtime API
+
+Hosts that create their instance at runtime register the plugin on it:
+
+```ts
+import { createInstance } from '@module-federation/runtime';
+import tauriPlugin from '@module-federation/tauri';
+
+const instance = createInstance({ name: 'host', remotes: [] });
+instance.registerPlugins([tauriPlugin()]);
+```
+
+Registering after `createInstance` works too: nested remotes are covered either way.
+
 ## Behavior
 
-- `afterResolve`: rewrites http(s) `remoteInfo.entry` URLs to `mf://`, keeping the path.
+- `afterResolve`: rewrites http(s) `remoteInfo.entry` URLs to the `mf` scheme, keeping the path. That is `mf://<host>/...` on macOS, iOS and Linux, and `http(s)://mf.<host>/...` on Windows and Android, where Tauri serves custom schemes that way. Outside Tauri, entries are left unchanged.
 - `onLoad`: tells `tauri-plugin-module-federation` that the remote's entry loaded, so it keeps that version as last-known-good.
 - `errorLoadRemote`: when a remote fails to load, asks the Tauri plugin to roll back new, unconfirmed entry versions. If any were rolled back, the page reloads with the last versions that worked.
-- Registers the same hooks as a global runtime plugin during `beforeInit`, so nested remotes are covered too.
+- Registers the same hooks as a global runtime plugin when it is registered (`apply`, or `beforeInit` on older runtimes), so nested remotes are covered too.
 
 Fetching, caching, offline fallback and rollback happen in `tauri-plugin-module-federation`. See [docs/offline-and-rollback.md](https://github.com/module-federation/tauri/blob/main/docs/offline-and-rollback.md) and [docs/architecture.md](https://github.com/module-federation/tauri/blob/main/docs/architecture.md).
 
