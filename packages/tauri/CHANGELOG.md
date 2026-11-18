@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 (2026-11-18)
+
+## What's Changed
+* fix: load remotes on Windows and Android, and with plugins registered after createInstance by @Nsttt in https://github.com/module-federation/tauri/pull/41
+* feat: serve remotes from a local folder by @Nsttt in https://github.com/module-federation/tauri/pull/39
+
+
+**Full Changelog**: https://github.com/module-federation/tauri/compare/1.0.2...1.1.0
+
 ## 1.0.2 (2026-11-06)
 
 ## What's Changed
