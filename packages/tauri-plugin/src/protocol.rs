@@ -878,6 +878,24 @@ mod tests {
         let chunk = request(&protocol, &uri("mf://remotes.invalid/guest/static/js/a.js"));
         assert_eq!(chunk.body(), b"chunk");
 
+        // Windows and Android form: the mf authority is not the remote's host, but the
+        // prefix still matches once the request is mapped back to the remote URL.
+        let encoded: String = form_urlencoded::byte_serialize(full_url.as_bytes()).collect();
+        let entry = request(
+            &protocol,
+            &uri(&format!(
+                "mf://remotes.invalid.localhost/guest/remoteEntry.js?fullUrl={encoded}"
+            )),
+        );
+        assert_eq!(entry.body(), b"entry");
+        assert_eq!(entry.headers()["x-mf-source"], "local");
+        let chunk = request(
+            &protocol,
+            &uri("mf://remotes.invalid.localhost/guest/static/js/a.js"),
+        );
+        assert_eq!(chunk.body(), b"chunk");
+        assert_eq!(chunk.headers()["x-mf-source"], "local");
+
         let commit = request(&protocol, &entry_uri(full_url, "&mf-commit=1"));
         assert_eq!(commit.status(), StatusCode::NO_CONTENT);
         assert_eq!(
