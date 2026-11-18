@@ -119,4 +119,4 @@ Files are stored under the cache folder, grouped by remote origin:
 - **Only load errors trigger a rollback.** A release that loads but then crashes the webview, renders nothing, or hangs without throwing is not detected.
 - **Manifest remotes are not covered.** `mf-manifest.json` remotes are fetched by the Module Federation runtime directly, not through `mf://`, so they get no offline cache and no rollback.
 - **Vite hosts may also fetch entries directly.** `@module-federation/vite` can prefetch ES module remote entries over plain HTTP. The copy that actually runs still comes through `mf://`.
-- **Tested on macOS.** The Windows form, `http://mf.localhost/...`, has not been tested end to end.
+- **Tested on macOS.** The Windows and Android form (`http://mf.<host>.localhost/...`, see [Architecture](./architecture.md#windows-and-android)) is covered by unit tests, but not yet end to end.

@@ -39,6 +39,20 @@ tauri::Builder::default()
     .expect("error while running tauri application");
 ```
 
+### Runtime API (`createInstance`)
+
+Hosts that create their instance at runtime register the plugin on it:
+
+```ts
+import { createInstance } from '@module-federation/runtime';
+import tauriPlugin from '@module-federation/tauri';
+
+const instance = createInstance({ name: 'host', remotes: [] });
+instance.registerPlugins([tauriPlugin()]);
+```
+
+Registering after `createInstance` works too: nested remotes are covered either way.
+
 ### Vite (`@module-federation/vite`)
 
 Hosts built with [`@module-federation/vite`](https://github.com/module-federation/vite) use the same runtime plugin:

@@ -1,8 +1,13 @@
 //! The `mf://` protocol handler.
 //!
-//! Remote entries are requested as `mf://<host><path>?fullUrl=<encoded http(s) URL>`.
+//! Remote entries are requested as `mf://<authority><path>?fullUrl=<encoded http(s) URL>`.
 //! Everything an entry loads afterwards (relative chunk URLs) arrives as
-//! `mf://<host><path>` and is mapped back to the scheme the entry used.
+//! `mf://<authority><path>` and is mapped back to the origin of that entry's `fullUrl`.
+//!
+//! The authority is usually the remote's own `host[:port]`. On Windows and Android the
+//! webview reaches custom schemes as `http(s)://mf.<authority>/...`, so the runtime plugin
+//! may use a different authority there (such as `cdn.example.com.localhost`). Nothing
+//! here depends on it matching the remote.
 //!
 //! # Network and cache
 //!
@@ -69,8 +74,9 @@ pub(crate) struct Target {
     pub mode: Mode,
 }
 
-/// Remote origin schemes by `(host, port)`, learned from entry requests.
-type Schemes = Mutex<HashMap<(String, Option<u16>), String>>;
+/// Remote origins (`scheme://host[:port]`) by the `mf://` authority that stands for them,
+/// learned from entry requests.
+type Origins = Mutex<HashMap<String, String>>;
 
 /// An entry version served during this launch.
 struct Served {
@@ -85,7 +91,7 @@ struct Served {
 pub(crate) struct Protocol {
     client: reqwest::Client,
     cache: Cache,
-    schemes: Schemes,
+    origins: Origins,
     unreachable: Mutex<HashMap<String, Instant>>,
     served: Mutex<HashMap<String, Served>>,
     rollbacks: Mutex<usize>,
@@ -144,7 +150,7 @@ impl Protocol {
         Self {
             client,
             cache,
-            schemes: Mutex::default(),
+            origins: Mutex::default(),
             unreachable: Mutex::default(),
             served: Mutex::default(),
             rollbacks: Mutex::default(),
@@ -158,7 +164,7 @@ impl Protocol {
             return text(StatusCode::OK, self.rollback().to_string());
         }
 
-        let target = match resolve(request.uri(), &self.schemes) {
+        let target = match resolve(request.uri(), &self.origins) {
             Ok(target) => target,
             Err((status, message)) => return text(status, message),
         };
@@ -404,9 +410,12 @@ fn cache_key(url: &Url) -> String {
 }
 
 /// Maps an `mf://` request URI to the remote URL it stands for.
-pub(crate) fn resolve(uri: &Uri, schemes: &Schemes) -> Result<Target, (StatusCode, String)> {
+pub(crate) fn resolve(uri: &Uri, origins: &Origins) -> Result<Target, (StatusCode, String)> {
     let params = query_params(uri);
-    let mut schemes = schemes
+    let authority = uri
+        .authority()
+        .map(|authority| authority.as_str().to_ascii_lowercase());
+    let mut origins = origins
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -421,8 +430,17 @@ pub(crate) fn resolve(uri: &Uri, schemes: &Schemes) -> Result<Target, (StatusCod
                 )
             })?;
 
-        let host = url.host_str().unwrap_or_default().to_string();
-        schemes.insert((host, url.port()), url.scheme().to_string());
+        let origin = url.origin().ascii_serialization();
+        // The remote's own host[:port] (the usual mf:// authority), and the authority this
+        // request actually used, if it differs (Windows and Android).
+        let mut remote_authority = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if let Some(port) = url.port() {
+            remote_authority.push_str(&format!(":{port}"));
+        }
+        origins.insert(remote_authority, origin.clone());
+        if let Some(authority) = authority {
+            origins.insert(authority, origin);
+        }
 
         let mode = if params.contains_key(COMMIT_PARAM) {
             Mode::Commit
@@ -432,20 +450,18 @@ pub(crate) fn resolve(uri: &Uri, schemes: &Schemes) -> Result<Target, (StatusCod
         return Ok(Target { url, mode });
     }
 
-    let (Some(host), Some(authority)) = (uri.host(), uri.authority()) else {
+    let Some(authority) = authority else {
         return Err((StatusCode::BAD_REQUEST, format!("{uri} has no host")));
     };
-    let scheme = schemes
-        .get(&(host.to_string(), uri.port_u16()))
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                format!("{uri}: no remote entry has been loaded from {authority} yet"),
-            )
-        })?;
+    let origin = origins.get(&authority).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("{uri}: no remote entry has been loaded from {authority} yet"),
+        )
+    })?;
     let path_and_query = uri.path_and_query().map_or("/", |p| p.as_str());
 
-    Url::parse(&format!("{scheme}://{authority}{path_and_query}"))
+    Url::parse(&format!("{origin}{path_and_query}"))
         .map(|url| Target {
             url,
             mode: Mode::Asset,
@@ -505,11 +521,11 @@ mod tests {
 
     #[test]
     fn entry_requests_use_the_full_url_including_its_query() {
-        let schemes = Schemes::default();
+        let origins = Origins::default();
 
         let target = resolve(
             &entry_uri("https://cdn.example.com/app/remoteEntry.js?v=1&t=2", ""),
-            &schemes,
+            &origins,
         )
         .unwrap();
 
@@ -522,14 +538,14 @@ mod tests {
 
     #[test]
     fn chunk_requests_reuse_the_scheme_of_the_entry() {
-        let schemes = Schemes::default();
+        let origins = Origins::default();
         resolve(
             &entry_uri("http://localhost:3002/remoteEntry.js", ""),
-            &schemes,
+            &origins,
         )
         .unwrap();
 
-        let target = resolve(&uri("mf://localhost:3002/static/js/a.js?x=1"), &schemes).unwrap();
+        let target = resolve(&uri("mf://localhost:3002/static/js/a.js?x=1"), &origins).unwrap();
 
         assert_eq!(
             target.url.as_str(),
@@ -540,32 +556,61 @@ mod tests {
 
     #[test]
     fn chunk_requests_on_default_ports_resolve() {
-        let schemes = Schemes::default();
+        let origins = Origins::default();
         resolve(
             &entry_uri("https://cdn.example.com/app/remoteEntry.js", ""),
-            &schemes,
+            &origins,
         )
         .unwrap();
 
-        let target = resolve(&uri("mf://cdn.example.com/app/chunk.js"), &schemes).unwrap();
+        let target = resolve(&uri("mf://cdn.example.com/app/chunk.js"), &origins).unwrap();
 
         assert_eq!(target.url.as_str(), "https://cdn.example.com/app/chunk.js");
     }
 
     #[test]
+    fn the_mf_authority_does_not_have_to_match_the_remote() {
+        // Windows and Android form: http://mf.cdn.example.com.localhost/... reaches the
+        // handler as mf://cdn.example.com.localhost/...
+        let origins = Origins::default();
+        let encoded: String =
+            form_urlencoded::byte_serialize(b"https://cdn.example.com/app/remoteEntry.js")
+                .collect();
+        resolve(
+            &uri(&format!(
+                "mf://cdn.example.com.localhost/app/remoteEntry.js?fullUrl={encoded}"
+            )),
+            &origins,
+        )
+        .unwrap();
+
+        let target = resolve(
+            &uri("mf://cdn.example.com.localhost/app/static/js/a.js"),
+            &origins,
+        )
+        .unwrap();
+
+        assert_eq!(
+            target.url.as_str(),
+            "https://cdn.example.com/app/static/js/a.js"
+        );
+        assert!(resolve(&uri("mf://other.example.com/app/a.js"), &origins).is_err());
+    }
+
+    #[test]
     fn chunk_requests_for_unknown_hosts_fail_cleanly() {
         let (status, _) =
-            resolve(&uri("mf://localhost:3002/a.js"), &Schemes::default()).unwrap_err();
+            resolve(&uri("mf://localhost:3002/a.js"), &Origins::default()).unwrap_err();
 
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn commit_flag_selects_commit_mode() {
-        let schemes = Schemes::default();
+        let origins = Origins::default();
         let entry = "https://cdn.example.com/app/remoteEntry.js";
 
-        let commit = resolve(&entry_uri(entry, "&mf-commit=1"), &schemes).unwrap();
+        let commit = resolve(&entry_uri(entry, "&mf-commit=1"), &origins).unwrap();
 
         assert_eq!(commit.mode, Mode::Commit);
         assert_eq!(commit.url.as_str(), entry);
@@ -583,7 +628,7 @@ mod tests {
     #[test]
     fn non_http_full_urls_are_rejected() {
         for full_url in ["file:///etc/passwd", "not a url", "mf://localhost/x"] {
-            let (status, _) = resolve(&entry_uri(full_url, ""), &Schemes::default()).unwrap_err();
+            let (status, _) = resolve(&entry_uri(full_url, ""), &Origins::default()).unwrap_err();
             assert_eq!(status, StatusCode::BAD_REQUEST, "{full_url}");
         }
     }
