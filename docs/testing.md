@@ -23,7 +23,8 @@ pnpm release:sync:check
 The unit tests in `packages/tauri-plugin` cover:
 
 - **`cache.rs`:** header round trips, origins kept apart, query strings ignored, commit and rejection rules, and atomic writes.
-- **`protocol.rs`:** URL resolution, plus a local HTTP server that plays five launches of a remote releasing a broken version and checks the rollback. They also cover disabled rollback, the per-launch rollback limit, and the gateway error for a remote that was never cached, and chunk requests whose `mf` authority differs from the remote's host (the Windows and Android form).
+- **`local.rs`:** prefix matching, content types and CORS, and paths that try to leave the folder.
+- **`protocol.rs`:** URL resolution, plus a local HTTP server that plays five launches of a remote releasing a broken version and checks the rollback. They also cover disabled rollback, the per-launch rollback limit, the gateway error for a remote that was never cached, chunk requests whose `mf` authority differs from the remote's host (the Windows and Android form), and local remotes served without the network.
 
 The tests in `packages/tauri/test` cover the runtime plugin: the URL form on each platform (with a mocked `__TAURI_INTERNALS__.convertFileSrc`), no rewriting outside Tauri, commit and rollback requests, and registering the plugin after `createInstance`.
 

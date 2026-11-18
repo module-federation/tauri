@@ -3460,6 +3460,7 @@ dependencies = [
  "base64 0.22.1",
  "form_urlencoded",
  "log",
+ "percent-encoding",
  "reqwest 0.12.5",
  "serde",
  "sha",

@@ -10,6 +10,7 @@ Tauri 2 plugin that loads [Module Federation](https://module-federation.io) remo
 - An `mf://` protocol handler that fetches remote files and caches them in the app cache dir, so the cache survives restarts.
 - Remotes that keep loading offline, when a remote answers with an error status, or when it accepts the connection but never answers.
 - Automatic rollback to the last version that loaded when a new release of a remote fails to load.
+- Remotes served from a local folder, for apps that install remotes with their own updater.
 
 ## Install
 
@@ -76,6 +77,25 @@ Rollback is on by default in release builds and off in debug builds.
 | A new release that fails to load | The page reloads with the last version that loaded. That version is kept on later launches. |
 
 The cache layout and known limitations are in [Offline and failed releases](https://github.com/module-federation/tauri/blob/main/docs/offline-and-rollback.md). How requests flow through both packages is in [Architecture](https://github.com/module-federation/tauri/blob/main/docs/architecture.md).
+
+## Local remotes
+
+Apps that install remotes themselves (an updater that checks signatures, or an offline installer) can serve a remote URL prefix from a folder instead of the network. The host keeps its `http(s)` entry:
+
+```rust
+use tauri::path::BaseDirectory;
+
+tauri::Builder::default()
+    .plugin(
+        tauri_plugin_module_federation::Builder::new()
+            .local_remote("https://cdn.example.com/guest/", BaseDirectory::AppData, "remotes/guest")
+            .build(),
+    )
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+```
+
+Local remotes skip the network, the cache and rollback. Folders can also be changed at runtime through `LocalRemotes` in the app state. See [Local remotes](https://github.com/module-federation/tauri/blob/main/docs/local-remotes.md).
 
 ## License
 
