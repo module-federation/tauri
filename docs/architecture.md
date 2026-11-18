@@ -35,13 +35,26 @@ remotes: { guest: 'guest@http://localhost:3002/remoteEntry.js' }
 
 2. **Entry request.** The webview asks the Tauri plugin for that URL. The handler reads `fullUrl`, which must be an `http(s)` URL with a host (otherwise `400`). It remembers that `localhost:3002` uses `http`, and serves the request as an **entry**: versioned and eligible for rollback. See [Offline and failed releases](./offline-and-rollback.md).
 
-3. **Chunk requests.** The entry loads its chunks with relative URLs, such as `mf://localhost:3002/static/js/123.abc.js`. These have no `fullUrl`. The handler looks up the scheme it recorded for `(localhost, 3002)` and fetches `http://localhost:3002/static/js/123.abc.js` as an **asset**: network first, cache on failure. A host and port that never came through an entry request gets a `404`.
+3. **Chunk requests.** The entry loads its chunks with relative URLs, such as `mf://localhost:3002/static/js/123.abc.js`. These have no `fullUrl`. The handler looks up the origin it recorded for `localhost:3002` and fetches `http://localhost:3002/static/js/123.abc.js` as an **asset**: network first, cache on failure. An authority that never came through an entry request gets a `404`.
 
-4. **Nested remotes.** A remote can consume remotes of its own, and those run in a separate runtime instance. During `beforeInit`, the host plugin registers the same hooks as a global runtime plugin, so nested remotes are rewritten too.
+4. **Nested remotes.** A remote can consume remotes of its own, and those run in a separate runtime instance. When the host plugin is registered, it registers the same hooks as a global runtime plugin, so nested remotes are rewritten too. That happens in `apply`, which runs for config plugins and for `instance.registerPlugins()` after `createInstance`, and again in `beforeInit` for runtimes without `apply`.
 
-Only `http(s)` entries are rewritten. Entries already on `mf://` pass through unchanged, because the host and global plugins can both run on one instance.
+Only `http(s)` entries are rewritten, and only inside Tauri (when `window.__TAURI_INTERNALS__` exists). Entries the plugin already rewrote pass through unchanged, because the host and global plugins can both run on one instance.
 
-On Windows, Tauri exposes custom schemes as `http://mf.localhost/...` instead of `mf://...`. The webview handles that mapping, so the plugins do not need to.
+## Windows and Android
+
+WebView2 and the Android webview cannot load custom schemes. Tauri serves them at `http(s)://<scheme>.<authority>/...` instead, and hands those requests to the plugin as `<scheme>://<authority>/...`. A page that requests `mf://...` directly fails with `URL scheme "mf" is not supported`.
+
+The runtime plugin asks Tauri's `convertFileSrc` which form the webview uses, and builds URLs to match:
+
+| Platform | Entry for `https://cdn.example.com/app/remoteEntry.js` |
+|---|---|
+| macOS, iOS, Linux | `mf://cdn.example.com/app/remoteEntry.js?fullUrl=...` |
+| Windows, Android | `http://mf.cdn.example.com.localhost/app/remoteEntry.js?fullUrl=...` (`https` when the app uses `useHttpsScheme`) |
+
+On Windows and Android the remote's host goes under `localhost`, so a request the webview fails to intercept never leaves the machine. IP addresses stay valid host names that way (`mf.127.0.0.1.localhost`), and IPv6 addresses become `ipv6-<address with dashes>`. Control requests use the same form, such as `http://mf.localhost/?mf-rollback=1`.
+
+The Tauri plugin does not depend on the authority matching the remote. Each entry request records which origin its `mf` authority stands for, taken from `fullUrl`, and chunk requests are mapped back through that record.
 
 ## Runtime plugin hooks
 
@@ -50,7 +63,8 @@ On Windows, Tauri exposes custom schemes as `http://mf.localhost/...` instead of
 | `afterResolve` | Rewrites `http(s)` entries to `mf://`. |
 | `onLoad` | A remote loaded. Sends `<entry URL>&mf-commit=1` once per entry and page load, so the Tauri plugin keeps that version as last-known-good. |
 | `errorLoadRemote` | A remote failed during `onLoad` or `beforeLoadShare`. Requests `mf://localhost/?mf-rollback=1`. If any versions were rolled back, it reloads the page and leaves the failed load pending. Otherwise the error goes on to the app. |
-| `beforeInit` | Registers the hooks above as a global plugin (`tauri-module-federation-global`). |
+| `apply` | Runs when the plugin is registered. Registers the hooks above as a global plugin (`tauri-module-federation-global`), once. |
+| `beforeInit` | Does the same for runtimes without `apply`. |
 
 The hooks work with both call styles: webpack/Rsbuild bundler runtimes call `loadRemote(id, { loadFactory: false, from: 'build' })`, and `@module-federation/vite` calls `loadRemote(id)`.
 
@@ -74,4 +88,4 @@ The runtime plugin sends two kinds of control requests over `mf://`. Their respo
 
 ## Debug builds
 
-In debug builds the Tauri plugin injects a script that warns in the console when it cannot find the Module Federation runtime, or when `@module-federation/tauri` is not registered on it.
+In debug builds the Tauri plugin injects a script that warns in the console when `@module-federation/tauri` is not in use. It checks 2 s after the page loads, so instances created at runtime count. It passes when the runtime plugin was created (it sets `window.__MF_TAURI_RUNTIME_PLUGIN__`), or when any instance or the global plugins include it.

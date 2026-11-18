@@ -37,6 +37,7 @@
 	},
 	"scripts": {
 		"build": "rslib build",
+		"test": "node --test",
 		"pack:dry": "npm pack --dry-run"
 	},
 	"peerDependencies": {

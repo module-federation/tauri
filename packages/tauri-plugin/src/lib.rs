@@ -124,25 +124,38 @@ impl Builder {
                 });
             });
 
+        // Debug builds warn when nothing in the page registered @module-federation/tauri.
+        // Apps can create their instance late (runtime API), so the check waits for the
+        // page to load and looks at every instance, the global plugins, and the marker the
+        // runtime plugin sets when it is created.
         #[cfg(debug_assertions)]
-        let builder =
-            builder.js_init_script(
-                r#"""
-                setTimeout(() => {
-                	const federation = window.__FEDERATION__;
-
-                 	if(federation) {
-                  	const plugins = federation.__INSTANCES__[0]?.hooks.registerPlugins ?? {};
-
-                    if(!("tauri-module-federation-host" in plugins))
-                    	console.warn("[tauri-plugin-module-federation] @module-federation/tauri not found. Have you added it to your Module Federation configuration?")
-
-                  } else console.warn("[tauri-plugin-module-federation] Module Federation Runtime not found")
-
-                }, 100);
-               	"""#
-                .to_string(),
-            );
+        let builder = builder.js_init_script(
+            r#"
+            (() => {
+                if (window.top !== window) return;
+                const NAMES = ['tauri-module-federation-host', 'tauri-module-federation-global'];
+                const check = () => {
+                    if (window.__MF_TAURI_RUNTIME_PLUGIN__) return;
+                    const federation = window.__FEDERATION__;
+                    const instances = federation?.__INSTANCES__ ?? [];
+                    const registered =
+                        instances.some((instance) =>
+                            NAMES.some((name) => name in (instance?.hooks?.registerPlugins ?? {})),
+                        ) || (federation?.__GLOBAL_PLUGIN__ ?? []).some((plugin) => NAMES.includes(plugin?.name));
+                    if (registered) return;
+                    console.warn(
+                        instances.length
+                            ? '[tauri-plugin-module-federation] @module-federation/tauri is not registered on any Module Federation instance. Add it to runtimePlugins, or call instance.registerPlugins([tauriPlugin()]).'
+                            : '[tauri-plugin-module-federation] No Module Federation runtime found. Remotes load through mf:// only when @module-federation/tauri is registered.',
+                    );
+                };
+                const schedule = () => setTimeout(check, 2000);
+                if (document.readyState === 'complete') schedule();
+                else window.addEventListener('load', schedule, { once: true });
+            })();
+            "#
+            .to_string(),
+        );
 
         builder
             .setup(move |app, api| {
